@@ -1,4 +1,4 @@
-// File: F:\ASCII\BLE_communication\web-dashboard\app\layout.tsx
+// File: F:\ASCII\web-dashboard\app\layout.tsx
 import * as entry from '../../../app/layout.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

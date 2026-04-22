@@ -1,9 +1,15 @@
 import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
 import './globals.css';
 
+const inter = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+});
+
 export const metadata: Metadata = {
-  title: 'Firefighter Emergency Dashboard',
-  description: 'Live BLE mesh emergency alerts',
+  title: 'Rescue Team Dashboard',
+  description: 'Live BLE mesh emergency alerts for rescue teams',
 };
 
 export default function RootLayout({
@@ -13,7 +19,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className={inter.className}>{children}</body>
     </html>
   );
 }

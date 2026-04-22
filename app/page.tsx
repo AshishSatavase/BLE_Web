@@ -10,7 +10,6 @@ type Alert = {
   timestamp: string;
   latitude: number | null;
   longitude: number | null;
-  hopCount: number;
 };
 
 const ALERTS_API_URL = 'https://ble-backend-pn2k.onrender.com/api/alerts';
@@ -27,6 +26,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [backendOnline, setBackendOnline] = useState(false);
   const [expandedAlertId, setExpandedAlertId] = useState<string | null>(null);
+  const [deletingAlertId, setDeletingAlertId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
@@ -120,29 +120,69 @@ export default function DashboardPage() {
     };
   }, []);
 
+  const handleResolveIssue = async (messageId: string) => {
+    try {
+      setDeletingAlertId(messageId);
+      const response = await fetch(
+        `${ALERTS_API_URL}/${encodeURIComponent(messageId)}`,
+        {
+          method: 'DELETE',
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Unable to resolve alert (${response.status})`);
+      }
+
+      setAlerts((prev) => prev.filter((alert) => alert.messageId !== messageId));
+      seenMessageIdsRef.current.delete(messageId);
+      setExpandedAlertId((prev) => (prev === messageId ? null : prev));
+      setToasts((prev) => [
+        ...prev,
+        {
+          id: `${messageId}-resolved-${Date.now()}`,
+          text: 'Issue marked as resolved and removed from active alerts.',
+        },
+      ]);
+    } catch (resolveError) {
+      setToasts((prev) => [
+        ...prev,
+        {
+          id: `${messageId}-resolve-error-${Date.now()}`,
+          text:
+            resolveError instanceof Error
+              ? resolveError.message
+              : 'Failed to resolve alert.',
+        },
+      ]);
+    } finally {
+      setDeletingAlertId(null);
+    }
+  };
+
   return (
-    <main className="min-h-screen bg-white p-4 text-slate-800 md:p-8">
+    <main className="min-h-screen bg-gradient-to-b from-emerald-50 via-lime-50 to-white p-4 text-slate-800 md:p-8">
       <section className="mx-auto max-w-7xl">
-        <header className="mb-6 rounded-2xl border border-red-100 bg-white p-6 shadow-sm">
-          <h1 className="text-2xl font-bold tracking-tight text-red-700 md:text-3xl">
-            Firefighter Emergency Dashboard
+        <header className="mb-6 rounded-2xl border border-emerald-200 bg-white/90 p-6 shadow-sm shadow-emerald-100">
+          <h1 className="text-2xl font-bold tracking-tight text-emerald-800 md:text-3xl">
+            Rescue Team Dashboard
           </h1>
           <p className="mt-2 text-sm text-slate-600">
             Live emergency feed from BLE mesh bridge. Incoming alerts refresh every
             2 seconds and expand into tactical detail cards with location preview.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700">
+            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800">
               Total Alerts: {alerts.length}
             </span>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+            <span className="rounded-full bg-lime-100 px-3 py-1 text-xs font-medium text-lime-900">
               Mode: Incident Monitoring
             </span>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900">
               Refresh: 2s
             </span>
           </div>
-          <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-red-200 px-3 py-1 text-xs">
+          <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs text-emerald-900">
             <span
               className={`h-2.5 w-2.5 rounded-full ${
                 backendOnline ? 'bg-emerald-400' : 'bg-red-400'
@@ -154,24 +194,20 @@ export default function DashboardPage() {
         </header>
 
         {isLoading ? (
-          <div className="rounded-2xl border border-red-100 bg-white p-8 text-center text-slate-600 shadow-sm">
+          <div className="rounded-2xl border border-emerald-200 bg-white p-8 text-center text-slate-600 shadow-sm">
             Loading alerts...
           </div>
         ) : alerts.length === 0 ? (
-          <div className="rounded-2xl border border-red-100 bg-white p-8 text-center text-slate-600 shadow-sm">
+          <div className="rounded-2xl border border-emerald-200 bg-white p-8 text-center text-slate-600 shadow-sm">
             No alerts received yet.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-red-100 bg-white shadow-sm">
-            <div className="grid grid-cols-12 border-b border-red-100 bg-red-50/60 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-red-700">
-              <div className="col-span-3">Sender</div>
-              <div className="col-span-5">Message</div>
-              <div className="col-span-2">Time</div>
-              <div className="col-span-2 text-right">Hop Count</div>
-            </div>
-
+          <div className="space-y-4">
             {alerts.map((alert) => (
-              <article key={alert.messageId} className="border-b border-red-50 last:border-b-0">
+              <article
+                key={alert.messageId}
+                className="overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-sm transition hover:shadow-md"
+              >
                 <button
                   type="button"
                   onClick={() =>
@@ -179,31 +215,35 @@ export default function DashboardPage() {
                       prev === alert.messageId ? null : alert.messageId
                     )
                   }
-                  className="grid w-full grid-cols-12 items-center gap-2 px-4 py-4 text-left transition hover:bg-red-50/40"
+                  className="w-full px-5 py-4 text-left transition hover:bg-emerald-50/40"
                 >
-                  <div className="col-span-3">
-                    <p className="font-semibold text-slate-800">{alert.senderNickname}</p>
-                    <p className="text-xs text-slate-500">{alert.senderId}</p>
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-800">{alert.senderNickname}</p>
+                      <p className="text-xs text-slate-500">{alert.senderId}</p>
+                    </div>
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800">
+                      {new Date(alert.timestamp).toLocaleString(undefined, {
+                        hour12: false,
+                      })}
+                    </div>
                   </div>
-                  <div className="col-span-5">
-                    <p className="truncate text-sm text-slate-700">{alert.content}</p>
+                  <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+                    <p className="text-sm leading-relaxed text-slate-700">{alert.content}</p>
                   </div>
-                  <div className="col-span-2 text-xs text-slate-600">
-                    {new Date(alert.timestamp).toLocaleString(undefined, {
-                      hour12: false,
-                    })}
-                  </div>
-                  <div className="col-span-2 text-right">
-                    <span className="rounded-md bg-red-100 px-2 py-1 text-xs font-medium text-red-700">
-                      {alert.hopCount}
-                    </span>
+                  <div className="mt-3 text-xs font-medium text-emerald-700">
+                    {expandedAlertId === alert.messageId
+                      ? 'Hide details'
+                      : 'View details and location'}
                   </div>
                 </button>
 
                 {expandedAlertId === alert.messageId && (
-                  <div className="grid gap-4 border-t border-red-100 bg-slate-50/60 px-4 py-4 md:grid-cols-2">
-                    <div className="space-y-2 rounded-xl border border-red-100 bg-white p-4">
-                      <h3 className="text-sm font-semibold text-red-700">Alert Details</h3>
+                  <div className="grid gap-4 border-t border-emerald-200 bg-emerald-50/40 px-4 py-4 md:grid-cols-2">
+                    <div className="space-y-2 rounded-xl border border-emerald-200 bg-white p-4">
+                      <h3 className="text-sm font-semibold text-emerald-800">
+                        Alert Details
+                      </h3>
                       <p className="text-sm">
                         <span className="font-medium text-slate-700">Message:</span>{' '}
                         {alert.content}
@@ -226,18 +266,33 @@ export default function DashboardPage() {
                         <span className="font-medium text-slate-700">Message ID:</span>{' '}
                         {alert.messageId}
                       </p>
+                      <button
+                        type="button"
+                        disabled={deletingAlertId === alert.messageId}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleResolveIssue(alert.messageId);
+                        }}
+                        className="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                      >
+                        {deletingAlertId === alert.messageId
+                          ? 'Resolving...'
+                          : 'Issue Resolved'}
+                      </button>
                     </div>
 
-                    <div className="rounded-xl border border-red-100 bg-white p-4">
-                      <h3 className="mb-3 text-sm font-semibold text-red-700">Location Map</h3>
+                    <div className="rounded-xl border border-emerald-300 bg-white p-4 shadow-inner">
+                      <h3 className="mb-3 text-sm font-semibold text-emerald-800">
+                        Location Map
+                      </h3>
                       {alert.latitude == null || alert.longitude == null ? (
-                        <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500">
+                        <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-emerald-300 bg-emerald-50 text-sm text-slate-600">
                           Location unavailable for this alert.
                         </div>
                       ) : (
                         <iframe
                           title={`map-${alert.messageId}`}
-                          className="h-72 w-full rounded-lg border border-red-100"
+                          className="h-72 w-full rounded-lg border-2 border-emerald-300"
                           src={`https://www.openstreetmap.org/export/embed.html?bbox=${
                             alert.longitude - 0.01
                           }%2C${alert.latitude - 0.01}%2C${
@@ -260,9 +315,9 @@ export default function DashboardPage() {
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className="rounded-lg border border-red-200 bg-white p-3 shadow-lg"
+            className="rounded-lg border border-emerald-200 bg-white p-3 shadow-lg"
           >
-            <p className="text-sm font-medium text-red-700">New Alert</p>
+            <p className="text-sm font-medium text-emerald-800">Alert Update</p>
             <p className="text-sm text-slate-700">{toast.text}</p>
           </div>
         ))}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 
 type Alert = {
   messageId: string;
@@ -25,8 +25,10 @@ export default function DashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [backendOnline, setBackendOnline] = useState(false);
-  const [expandedAlertId, setExpandedAlertId] = useState<string | null>(null);
+  const [expandedAlertIds, setExpandedAlertIds] = useState<Set<string>>(new Set());
   const [deletingAlertId, setDeletingAlertId] = useState<string | null>(null);
+  const [previousSearch, setPreviousSearch] = useState('');
+  const [selectedPreviousAlert, setSelectedPreviousAlert] = useState<Alert | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
@@ -35,6 +37,37 @@ export default function DashboardPage() {
     () => (backendOnline ? 'Backend Online' : 'Backend Offline'),
     [backendOnline]
   );
+
+  const { recentAlerts, previousAlerts } = useMemo(() => {
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    const recent: Alert[] = [];
+    const previous: Alert[] = [];
+
+    for (const alert of alerts) {
+      const timestampMs = new Date(alert.timestamp).getTime();
+      if (Number.isNaN(timestampMs) || timestampMs < oneHourAgo) {
+        previous.push(alert);
+      } else {
+        recent.push(alert);
+      }
+    }
+
+    return { recentAlerts: recent, previousAlerts: previous };
+  }, [alerts]);
+
+  const filteredPreviousAlerts = useMemo(() => {
+    const query = previousSearch.trim().toLowerCase();
+    if (!query) {
+      return previousAlerts;
+    }
+
+    return previousAlerts.filter((alert) =>
+      [alert.senderNickname, alert.senderId, alert.content, alert.messageId]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [previousAlerts, previousSearch]);
 
   useEffect(() => {
     const cleanupLegacyServiceWorker = async () => {
@@ -136,7 +169,14 @@ export default function DashboardPage() {
 
       setAlerts((prev) => prev.filter((alert) => alert.messageId !== messageId));
       seenMessageIdsRef.current.delete(messageId);
-      setExpandedAlertId((prev) => (prev === messageId ? null : prev));
+      setExpandedAlertIds((prev) => {
+        const next = new Set(prev);
+        next.delete(messageId);
+        return next;
+      });
+      setSelectedPreviousAlert((prev) =>
+        prev?.messageId === messageId ? null : prev
+      );
       setToasts((prev) => [
         ...prev,
         {
@@ -158,6 +198,18 @@ export default function DashboardPage() {
     } finally {
       setDeletingAlertId(null);
     }
+  };
+
+  const toggleAlertExpansion = (messageId: string) => {
+    setExpandedAlertIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
   };
 
   return (
@@ -202,111 +254,218 @@ export default function DashboardPage() {
             No alerts received yet.
           </div>
         ) : (
-          <div className="space-y-4">
-            {alerts.map((alert) => (
-              <article
-                key={alert.messageId}
-                className="overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-sm transition hover:shadow-md"
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    setExpandedAlertId((prev) =>
-                      prev === alert.messageId ? null : alert.messageId
-                    )
-                  }
-                  className="w-full px-5 py-4 text-left transition hover:bg-emerald-50/40"
-                >
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="font-semibold text-slate-800">{alert.senderNickname}</p>
-                      <p className="text-xs text-slate-500">{alert.senderId}</p>
-                    </div>
-                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800">
-                      {new Date(alert.timestamp).toLocaleString(undefined, {
-                        hour12: false,
+          <div className="grid gap-6 lg:grid-cols-3">
+            <section className="space-y-4 lg:col-span-2">
+              <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-white px-4 py-3">
+                <h2 className="text-lg font-semibold text-emerald-800">Recent Alerts</h2>
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
+                  {recentAlerts.length}
+                </span>
+              </div>
+
+              {recentAlerts.length === 0 ? (
+                <div className="rounded-2xl border border-emerald-200 bg-white p-6 text-sm text-slate-600">
+                  No recent alerts in the last hour.
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-sm">
+                  <table className="w-full text-left">
+                    <thead className="bg-emerald-100/70 text-xs uppercase tracking-wide text-emerald-900">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Sender</th>
+                        <th className="px-4 py-3 font-semibold">Message</th>
+                        <th className="px-4 py-3 font-semibold">Time</th>
+                        <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recentAlerts.map((alert) => {
+                        const isExpanded = expandedAlertIds.has(alert.messageId);
+
+                        return (
+                          <Fragment key={alert.messageId}>
+                            <tr className="border-t border-emerald-100 align-top">
+                              <td className="px-4 py-4">
+                                <p className="font-semibold text-slate-800">{alert.senderNickname}</p>
+                                <p className="text-xs text-slate-500">{alert.senderId}</p>
+                              </td>
+                              <td className="px-4 py-4">
+                                <p className="max-w-md truncate text-sm text-slate-700">
+                                  {alert.content}
+                                </p>
+                              </td>
+                              <td className="px-4 py-4 text-xs text-slate-700">
+                                {new Date(alert.timestamp).toLocaleString(undefined, {
+                                  hour12: false,
+                                })}
+                              </td>
+                              <td className="px-4 py-4">
+                                <div className="flex flex-wrap justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleAlertExpansion(alert.messageId)}
+                                    className="rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-50"
+                                  >
+                                    {isExpanded ? 'Hide Details' : 'Show Details'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={deletingAlertId === alert.messageId}
+                                    onClick={() => handleResolveIssue(alert.messageId)}
+                                    className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                                  >
+                                    {deletingAlertId === alert.messageId
+                                      ? 'Resolving...'
+                                      : 'Issue Resolved'}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr>
+                                <td colSpan={4} className="bg-emerald-50/40 px-4 py-4">
+                                  <div className="grid gap-4 border-t border-emerald-200 pt-4 md:grid-cols-2">
+                                    <div className="space-y-3 rounded-xl border border-emerald-200 bg-white p-4">
+                                      <h3 className="text-sm font-semibold uppercase tracking-wide text-emerald-800">
+                                        Message Details
+                                      </h3>
+                                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                        <p className="text-sm leading-relaxed text-slate-700">
+                                          {alert.content}
+                                        </p>
+                                      </div>
+                                      <div className="grid gap-2 text-sm">
+                                        <div className="rounded-md bg-emerald-50 px-3 py-2">
+                                          <span className="mr-1">🕒</span>
+                                          <span className="font-medium text-slate-700">
+                                            Timestamp:
+                                          </span>{' '}
+                                          {new Date(alert.timestamp).toLocaleString(undefined, {
+                                            hour12: false,
+                                          })}
+                                        </div>
+                                      </div>
+                                      <table className="w-full overflow-hidden rounded-lg border border-emerald-200 text-sm">
+                                        <thead className="bg-emerald-100 text-emerald-900">
+                                          <tr>
+                                            <th className="px-3 py-2 text-left font-semibold">Field</th>
+                                            <th className="px-3 py-2 text-left font-semibold">Value</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          <tr className="border-t border-emerald-100">
+                                            <td className="px-3 py-2 font-medium text-slate-700">
+                                              Latitude
+                                            </td>
+                                            <td className="px-3 py-2 text-slate-700">
+                                              {alert.latitude == null
+                                                ? 'N/A'
+                                                : alert.latitude.toFixed(6)}
+                                            </td>
+                                          </tr>
+                                          <tr className="border-t border-emerald-100">
+                                            <td className="px-3 py-2 font-medium text-slate-700">
+                                              Longitude
+                                            </td>
+                                            <td className="px-3 py-2 text-slate-700">
+                                              {alert.longitude == null
+                                                ? 'N/A'
+                                                : alert.longitude.toFixed(6)}
+                                            </td>
+                                          </tr>
+                                        </tbody>
+                                      </table>
+                                    </div>
+
+                                    <div className="rounded-xl border border-emerald-300 bg-white p-4 shadow-inner">
+                                      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-emerald-800">
+                                        <span className="mr-1">📍</span>Location Map
+                                      </h3>
+                                      {alert.latitude == null || alert.longitude == null ? (
+                                        <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-emerald-300 bg-emerald-50 text-sm text-slate-600">
+                                          Location unavailable for this alert.
+                                        </div>
+                                      ) : (
+                                        <iframe
+                                          title={`map-${alert.messageId}`}
+                                          className="h-72 w-full rounded-lg border-2 border-emerald-300"
+                                          src={`https://www.openstreetmap.org/export/embed.html?bbox=${
+                                            alert.longitude - 0.003
+                                          }%2C${alert.latitude - 0.003}%2C${
+                                            alert.longitude + 0.003
+                                          }%2C${alert.latitude + 0.003}&layer=mapnik&marker=${
+                                            alert.latitude
+                                          }%2C${alert.longitude}`}
+                                        />
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
                       })}
-                    </div>
-                  </div>
-                  <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
-                    <p className="text-sm leading-relaxed text-slate-700">{alert.content}</p>
-                  </div>
-                  <div className="mt-3 text-xs font-medium text-emerald-700">
-                    {expandedAlertId === alert.messageId
-                      ? 'Hide details'
-                      : 'View details and location'}
-                  </div>
-                </button>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
 
-                {expandedAlertId === alert.messageId && (
-                  <div className="grid gap-4 border-t border-emerald-200 bg-emerald-50/40 px-4 py-4 md:grid-cols-2">
-                    <div className="space-y-2 rounded-xl border border-emerald-200 bg-white p-4">
-                      <h3 className="text-sm font-semibold text-emerald-800">
-                        Alert Details
-                      </h3>
-                      <p className="text-sm">
-                        <span className="font-medium text-slate-700">Message:</span>{' '}
-                        {alert.content}
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-slate-700">Timestamp:</span>{' '}
-                        {new Date(alert.timestamp).toLocaleString(undefined, {
-                          hour12: false,
-                        })}
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-slate-700">Latitude:</span>{' '}
-                        {alert.latitude == null ? 'N/A' : alert.latitude.toFixed(6)}
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-slate-700">Longitude:</span>{' '}
-                        {alert.longitude == null ? 'N/A' : alert.longitude.toFixed(6)}
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-medium text-slate-700">Message ID:</span>{' '}
-                        {alert.messageId}
-                      </p>
-                      <button
-                        type="button"
-                        disabled={deletingAlertId === alert.messageId}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleResolveIssue(alert.messageId);
-                        }}
-                        className="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
-                      >
-                        {deletingAlertId === alert.messageId
-                          ? 'Resolving...'
-                          : 'Issue Resolved'}
-                      </button>
-                    </div>
+            <section className="rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm lg:col-span-1">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-base font-semibold text-emerald-800">Previous Alerts</h2>
+                <span className="rounded-full bg-lime-100 px-2.5 py-1 text-xs font-semibold text-lime-900">
+                  {filteredPreviousAlerts.length}
+                </span>
+              </div>
 
-                    <div className="rounded-xl border border-emerald-300 bg-white p-4 shadow-inner">
-                      <h3 className="mb-3 text-sm font-semibold text-emerald-800">
-                        Location Map
-                      </h3>
-                      {alert.latitude == null || alert.longitude == null ? (
-                        <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-emerald-300 bg-emerald-50 text-sm text-slate-600">
-                          Location unavailable for this alert.
-                        </div>
-                      ) : (
-                        <iframe
-                          title={`map-${alert.messageId}`}
-                          className="h-72 w-full rounded-lg border-2 border-emerald-300"
-                          src={`https://www.openstreetmap.org/export/embed.html?bbox=${
-                            alert.longitude - 0.01
-                          }%2C${alert.latitude - 0.01}%2C${
-                            alert.longitude + 0.01
-                          }%2C${alert.latitude + 0.01}&layer=mapnik&marker=${
-                            alert.latitude
-                          }%2C${alert.longitude}`}
-                        />
-                      )}
-                    </div>
-                  </div>
-                )}
-              </article>
-            ))}
+              <input
+                type="text"
+                value={previousSearch}
+                onChange={(event) => setPreviousSearch(event.target.value)}
+                placeholder="Search sender, id, or message"
+                className="mb-3 w-full rounded-lg border border-emerald-300 px-3 py-2 text-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200"
+              />
+
+              <div className="overflow-hidden rounded-lg border border-emerald-200">
+                <table className="w-full text-left text-sm">
+                  <thead className="sticky top-0 bg-emerald-100 text-emerald-900">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Sender</th>
+                      <th className="px-3 py-2 font-semibold">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredPreviousAlerts.length === 0 ? (
+                      <tr>
+                        <td colSpan={2} className="px-3 py-6 text-center text-slate-500">
+                          No matching previous alerts.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredPreviousAlerts.map((alert) => (
+                        <tr
+                          key={alert.messageId}
+                          onClick={() => setSelectedPreviousAlert(alert)}
+                          className="cursor-pointer border-t border-emerald-100 transition hover:bg-emerald-50"
+                        >
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-slate-800">{alert.senderNickname}</p>
+                            <p className="text-xs text-slate-500">{alert.senderId}</p>
+                          </td>
+                          <td className="px-3 py-2 text-xs text-slate-700">
+                            {new Date(alert.timestamp).toLocaleString(undefined, {
+                              hour12: false,
+                            })}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
         )}
       </section>
@@ -322,6 +481,78 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {selectedPreviousAlert && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/45 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-emerald-200 bg-white p-5 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-emerald-800">Previous Alert Details</h3>
+              <button
+                type="button"
+                onClick={() => setSelectedPreviousAlert(null)}
+                className="rounded-md border border-emerald-300 px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm">
+                <span className="font-medium text-slate-700">Sender:</span>{' '}
+                {selectedPreviousAlert.senderNickname}
+              </div>
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm">
+                <span className="font-medium text-slate-700">Sender ID:</span>{' '}
+                {selectedPreviousAlert.senderId}
+              </div>
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm md:col-span-2">
+                <span className="font-medium text-slate-700">Time:</span>{' '}
+                {new Date(selectedPreviousAlert.timestamp).toLocaleString(undefined, {
+                  hour12: false,
+                })}
+              </div>
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm md:col-span-2">
+                <span className="mr-1">🕒</span>
+                <span className="font-medium text-slate-700">Status:</span> Previous Alert
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-1 text-sm font-semibold text-slate-700">Main Message</p>
+              <p className="text-sm leading-relaxed text-slate-700">
+                {selectedPreviousAlert.content}
+              </p>
+            </div>
+
+            <table className="mt-4 w-full overflow-hidden rounded-lg border border-emerald-200 text-sm">
+              <thead className="bg-emerald-100 text-emerald-900">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold">Field</th>
+                  <th className="px-3 py-2 text-left font-semibold">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-t border-emerald-100">
+                  <td className="px-3 py-2 font-medium text-slate-700">Latitude</td>
+                  <td className="px-3 py-2 text-slate-700">
+                    {selectedPreviousAlert.latitude == null
+                      ? 'N/A'
+                      : selectedPreviousAlert.latitude.toFixed(6)}
+                  </td>
+                </tr>
+                <tr className="border-t border-emerald-100">
+                  <td className="px-3 py-2 font-medium text-slate-700">Longitude</td>
+                  <td className="px-3 py-2 text-slate-700">
+                    {selectedPreviousAlert.longitude == null
+                      ? 'N/A'
+                      : selectedPreviousAlert.longitude.toFixed(6)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

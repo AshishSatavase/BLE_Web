@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: ble-web-dashboard
+    env: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./out
+    pullRequestPreviewsEnabled: false

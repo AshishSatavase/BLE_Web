@@ -20,6 +20,32 @@ type Toast = {
   text: string;
 };
 
+const formatTimestampDirect = (timestamp: string) => {
+  if (!timestamp) return { date: '-', time: '-' };
+
+  const [datePart, timeRaw = ''] = timestamp.split('T');
+  const timePart = timeRaw.replace('Z', '').split('.')[0];
+
+  return {
+    date: datePart || '-',
+    time: timePart || '-',
+  };
+};
+
+const getAlertSignature = (alert: Alert) => {
+  const parsed = new Date(alert.timestamp);
+  const normalizedTimestamp = Number.isNaN(parsed.getTime())
+    ? alert.timestamp.trim()
+    : parsed.toISOString();
+
+  return [
+    alert.senderId.trim().toLowerCase(),
+    alert.senderNickname.trim().toLowerCase(),
+    alert.content.trim().toLowerCase(),
+    normalizedTimestamp,
+  ].join('|');
+};
+
 export default function DashboardPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -30,7 +56,7 @@ export default function DashboardPage() {
   const [previousSearch, setPreviousSearch] = useState('');
   const [selectedPreviousAlert, setSelectedPreviousAlert] = useState<Alert | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const seenMessageIdsRef = useRef<Set<string>>(new Set());
+  const seenAlertSignaturesRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
 
   const headerStatus = useMemo(
@@ -38,12 +64,26 @@ export default function DashboardPage() {
     [backendOnline]
   );
 
+  const uniqueAlerts = useMemo(() => {
+    const uniqueBySignature = new Map<string, Alert>();
+    for (const alert of alerts) {
+      const signature = getAlertSignature(alert);
+      if (!uniqueBySignature.has(signature)) {
+        uniqueBySignature.set(signature, alert);
+      }
+    }
+
+    return Array.from(uniqueBySignature.values()).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }, [alerts]);
+
   const { recentAlerts, previousAlerts } = useMemo(() => {
     const oneHourAgo = Date.now() - 60 * 60 * 1000;
     const recent: Alert[] = [];
     const previous: Alert[] = [];
 
-    for (const alert of alerts) {
+    for (const alert of uniqueAlerts) {
       const timestampMs = new Date(alert.timestamp).getTime();
       if (Number.isNaN(timestampMs) || timestampMs < oneHourAgo) {
         previous.push(alert);
@@ -53,7 +93,7 @@ export default function DashboardPage() {
     }
 
     return { recentAlerts: recent, previousAlerts: previous };
-  }, [alerts]);
+  }, [uniqueAlerts]);
 
   const filteredPreviousAlerts = useMemo(() => {
     const query = previousSearch.trim().toLowerCase();
@@ -117,13 +157,13 @@ export default function DashboardPage() {
         setAlerts(incoming);
         setError(null);
 
-        const incomingIds = new Set(incoming.map((a) => a.messageId));
+        const incomingSignatures = new Set(incoming.map(getAlertSignature));
         if (isInitialLoadRef.current) {
-          seenMessageIdsRef.current = incomingIds;
+          seenAlertSignaturesRef.current = incomingSignatures;
           isInitialLoadRef.current = false;
         } else {
           const newAlerts = incoming.filter(
-            (a) => !seenMessageIdsRef.current.has(a.messageId)
+            (a) => !seenAlertSignaturesRef.current.has(getAlertSignature(a))
           );
           if (newAlerts.length > 0) {
             setToasts((prev) => [
@@ -134,7 +174,7 @@ export default function DashboardPage() {
               })),
             ]);
           }
-          seenMessageIdsRef.current = incomingIds;
+          seenAlertSignaturesRef.current = incomingSignatures;
         }
       } catch (e) {
         if (!mounted) return;
@@ -168,7 +208,6 @@ export default function DashboardPage() {
       }
 
       setAlerts((prev) => prev.filter((alert) => alert.messageId !== messageId));
-      seenMessageIdsRef.current.delete(messageId);
       setExpandedAlertIds((prev) => {
         const next = new Set(prev);
         next.delete(messageId);
@@ -225,7 +264,7 @@ export default function DashboardPage() {
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800">
-              Total Alerts: {alerts.length}
+              Total Alerts: {uniqueAlerts.length}
             </span>
             <span className="rounded-full bg-lime-100 px-3 py-1 text-xs font-medium text-lime-900">
               Mode: Incident Monitoring
@@ -295,9 +334,10 @@ export default function DashboardPage() {
                                 </p>
                               </td>
                               <td className="px-4 py-4 text-xs text-slate-700">
-                                {new Date(alert.timestamp).toLocaleString(undefined, {
-                                  hour12: false,
-                                })}
+                                {(() => {
+                                  const ts = formatTimestampDirect(alert.timestamp);
+                                  return `${ts.date} ${ts.time}`;
+                                })()}
                               </td>
                               <td className="px-4 py-4">
                                 <div className="flex flex-wrap justify-end gap-2">
@@ -338,11 +378,22 @@ export default function DashboardPage() {
                                         <div className="rounded-md bg-emerald-50 px-3 py-2">
                                           <span className="mr-1">🕒</span>
                                           <span className="font-medium text-slate-700">
-                                            Timestamp:
+                                            Date:
                                           </span>{' '}
-                                          {new Date(alert.timestamp).toLocaleString(undefined, {
-                                            hour12: false,
-                                          })}
+                                          {(() => {
+                                            const ts = formatTimestampDirect(alert.timestamp);
+                                            return ts.date;
+                                          })()}
+                                        </div>
+                                        <div className="rounded-md bg-emerald-50 px-3 py-2">
+                                          <span className="mr-1">🕒</span>
+                                          <span className="font-medium text-slate-700">
+                                            Time:
+                                          </span>{' '}
+                                          {(() => {
+                                            const ts = formatTimestampDirect(alert.timestamp);
+                                            return ts.time;
+                                          })()}
                                         </div>
                                       </div>
                                       <table className="w-full overflow-hidden rounded-lg border border-emerald-200 text-sm">
@@ -455,9 +506,10 @@ export default function DashboardPage() {
                             <p className="text-xs text-slate-500">{alert.senderId}</p>
                           </td>
                           <td className="px-3 py-2 text-xs text-slate-700">
-                            {new Date(alert.timestamp).toLocaleString(undefined, {
-                              hour12: false,
-                            })}
+                            {(() => {
+                              const ts = formatTimestampDirect(alert.timestamp);
+                              return `${ts.date} ${ts.time}`;
+                            })()}
                           </td>
                         </tr>
                       ))
@@ -505,11 +557,19 @@ export default function DashboardPage() {
                 <span className="font-medium text-slate-700">Sender ID:</span>{' '}
                 {selectedPreviousAlert.senderId}
               </div>
-              <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm md:col-span-2">
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm">
+                <span className="font-medium text-slate-700">Date:</span>{' '}
+                {(() => {
+                  const ts = formatTimestampDirect(selectedPreviousAlert.timestamp);
+                  return ts.date;
+                })()}
+              </div>
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm">
                 <span className="font-medium text-slate-700">Time:</span>{' '}
-                {new Date(selectedPreviousAlert.timestamp).toLocaleString(undefined, {
-                  hour12: false,
-                })}
+                {(() => {
+                  const ts = formatTimestampDirect(selectedPreviousAlert.timestamp);
+                  return ts.time;
+                })()}
               </div>
               <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm md:col-span-2">
                 <span className="mr-1">🕒</span>
